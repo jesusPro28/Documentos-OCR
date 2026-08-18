@@ -1,0 +1,1125 @@
+
+============================================================
+CELDA 1 | tipo=code | id=01-carga-datos
+============================================================
+# =============================================================
+# SISTEMA DE VERIFICACION AUTOMATICA DE DOCUMENTOS ESCOLARES
+# Pipeline de 5 barreras: Actas de Nacimiento y CURPs
+# Referencia del pipeline: Bulatov et al. (2021). MIDV-2020. arXiv:2107.00396
+# =============================================================
+
+import warnings                  # libreria para controlar mensajes de advertencia
+warnings.filterwarnings('ignore') # ocultamos advertencias para mantener la salida limpia
+
+import pandas as pd              # pandas: maneja tablas de datos (como Excel pero en Python)
+from pathlib import Path         # Path: construye rutas de archivos que funcionan en Windows/Mac/Linux
+
+# BASE_DIR: ruta absoluta a la carpeta raiz del proyecto (MiDataset/)
+# El notebook vive en: MiDataset/modelo/modelo_notebook/
+# Con ../../ subimos 2 carpetas hasta llegar a MiDataset/
+# .resolve() convierte la ruta relativa a ruta absoluta completa
+BASE_DIR = Path('../../').resolve()
+
+# Leemos el archivo manifiesto.csv que tiene la lista de todas las imagenes
+# con su ruta y su clase (actas_nacimiento o curp)
+df = pd.read_csv(BASE_DIR / 'manifiesto.csv')
+
+# Mostramos las primeras 5 filas para verificar que cargo correctamente
+df.head()
+
+============================================================
+CELDA 2 | tipo=code | id=02-exploracion
+============================================================
+# Exploracion del dataset: revisamos que los datos esten completos
+# antes de entrenar la red neuronal
+
+print('Registros totales:', df.shape[0])  # cuantas imagenes hay en total
+print('Columnas:        ', df.shape[1])   # cuantas columnas tiene el CSV
+print()
+
+# isnull().sum() cuenta cuantas celdas vacias hay por columna
+# Si hay valores nulos, podrian causar errores al entrenar
+print('Valores nulos por columna:')
+print(df.isnull().sum())
+print()
+
+# value_counts() muestra cuantas imagenes hay de cada clase
+# Es importante que las clases esten balanceadas (similar cantidad)
+df['clase'].value_counts()
+
+============================================================
+CELDA 3 | tipo=code | id=03-barrera-1
+============================================================
+# =============================================================
+# BARRERA 1 — Clasificacion del tipo de documento con CNN
+# =============================================================
+# QUE HACE ESTA BARRERA?
+#   Recibe una imagen y determina si es un Acta de Nacimiento
+#   o una CURP usando una Red Neuronal Convolucional (CNN).
+#   Si la confianza de la prediccion es menor al 70%, rechaza
+#   el documento y le indica al alumno el motivo.
+#
+# COMO FUNCIONA?
+#   1. Preparamos los datos (imagenes + etiquetas)
+#   2. Definimos la arquitectura de la red neuronal
+#   3. Entrenamos la red para que aprenda a distinguir las clases
+#   4. Aplicamos la red entrenada sobre cada documento del dataset
+# =============================================================
+
+
+# ── LIBRERIAS NECESARIAS PARA ESTA BARRERA ────────────────────
+import torch                                       # PyTorch: framework principal de Deep Learning
+import torch.nn as nn                              # nn: modulo para construir capas de redes neuronales
+import torch.optim as optim                        # optim: algoritmos para ajustar los pesos de la red
+from torch.utils.data import Dataset, DataLoader   # Dataset: como leer datos | DataLoader: como entregarlos
+from torchvision import models, transforms         # models: redes pre-entrenadas | transforms: preparar imagenes
+from PIL import Image                              # PIL: abrir y manipular archivos de imagen
+from sklearn.model_selection import train_test_split  # divide el dataset en entrenamiento y prueba
+from sklearn.metrics import classification_report, confusion_matrix  # metricas de evaluacion
+
+
+# ── PASO 1: PREPARACION DE DATOS ──────────────────────────────
+# Las redes neuronales trabajan con numeros, no con texto.
+# Necesitamos convertir el nombre de la clase a un numero entero.
+CLASES     = {'actas_nacimiento': 0, 'curp': 1, 'otros': 2}    # texto → numero
+CLASES_INV = {v: k for k, v in CLASES.items()}     # numero → texto (para mostrar resultados legibles)
+
+# Filtramos el dataframe:
+#   - Solo filas cuya clase sea 'actas_nacimiento' o 'curp'
+#   - Solo imagenes que existen fisicamente en el disco duro
+df_v = df[df['clase'].isin(CLASES)].copy()
+df_v = df_v[df_v['ruta_imagen'].apply(lambda r: (BASE_DIR / r).exists())]
+
+# X = entradas de la red: lista con las rutas completas de cada imagen
+# Y = salidas esperadas: lista con 0 (acta) o 1 (curp) para cada imagen
+X = [str(BASE_DIR / r) for r in df_v['ruta_imagen']]
+Y = [CLASES[c] for c in df_v['clase']]
+
+# Division del dataset en dos grupos:
+#   - 80% para entrenamiento: la red aprende con estas imagenes
+#   - 20% para prueba: evaluamos con imagenes que la red NUNCA ha visto
+#   random_state=42  → siempre divide de la misma forma (reproducibilidad)
+#   stratify=Y       → garantiza la misma proporcion de clases en ambos grupos
+X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.20, random_state=42, stratify=Y)
+print(f'Total: {len(X)} imagenes | Entrenamiento: {len(X_train)} | Prueba: {len(X_test)}')
+
+
+# ── PASO 2: PREPARACION DE IMAGENES (TRANSFORMACIONES) ────────
+# Antes de entrar a la red, cada imagen debe transformarse:
+#   - Mismo tamano (224x224 pixeles, requerido por MobileNetV3)
+#   - Misma escala de valores (normalizacion de ImageNet)
+# Durante el entrenamiento agregamos variaciones aleatorias para
+# que la red aprenda mejor y no memorice las imagenes.
+
+# Transformaciones para ENTRENAMIENTO (con variaciones aleatorias):
+tf_train = transforms.Compose([
+    transforms.Resize((224, 224)),           # redimensiona a 224x224 pixeles
+    transforms.RandomHorizontalFlip(p=0.3),  # voltea horizontalmente el 30% de las veces
+    transforms.ColorJitter(brightness=0.2, contrast=0.2),  # varia brillo y contraste
+    transforms.ToTensor(),                   # convierte imagen a tensor: pixeles 0-255 → flotantes 0.0-1.0
+    transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225])  # normaliza con media/std de ImageNet
+])
+
+# Transformaciones para PRUEBA (sin variaciones, solo lo esencial):
+tf_test = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225])
+])
+
+# DocumentDataset: clase que le enseñamos a PyTorch como leer NUESTRAS imagenes.
+# PyTorch necesita saber 3 cosas:
+#   1. Cuantas imagenes hay
+#   2. Como abrir cada una
+#   3. Que transformacion aplicarle
+class DocumentDataset(Dataset):
+
+    def __init__(self, rutas, etiquetas, transform):
+        # Constructor: se ejecuta al crear el objeto
+        # Guarda las 3 cosas que necesita recordar
+        self.rutas     = rutas      # lista de rutas de imagenes
+        self.etiquetas = etiquetas  # lista de etiquetas (0 o 1)
+        self.transform = transform  # receta de transformacion a aplicar
+
+    def __len__(self):
+        # PyTorch pregunta: cuantas imagenes tienes?
+        # Responde con el numero total de rutas en la lista
+        return len(self.rutas)
+
+    def __getitem__(self, idx):
+        # PyTorch pide: dame la imagen numero idx
+        # idx es un indice: 0 = primera imagen, 1 = segunda, etc.
+        img = Image.open(self.rutas[idx]).convert('RGB')  # abre la imagen y fuerza formato RGB (3 canales)
+        imagen_lista = self.transform(img)                 # aplica resize, normalizacion, etc.
+        etiqueta = torch.tensor(self.etiquetas[idx], dtype=torch.long)  # convierte 0 o 1 al formato PyTorch
+        return imagen_lista, etiqueta  # regresa la imagen transformada y su etiqueta
+
+# DataLoader: toma el Dataset y entrega las imagenes en grupos (lotes/batches)
+# batch_size=8 → procesa 8 imagenes al mismo tiempo (mas eficiente que de 1 en 1)
+# shuffle=True en train → mezcla el orden para que la red no memorice la secuencia
+loader_train = DataLoader(DocumentDataset(X_train,Y_train,tf_train), batch_size=8, shuffle=True)
+loader_test  = DataLoader(DocumentDataset(X_test, Y_test, tf_test),  batch_size=8, shuffle=False)
+print(f'Lotes de entrenamiento: {len(loader_train)} | Lotes de prueba: {len(loader_test)}')
+
+
+# ── PASO 3: RED NEURONAL — MobileNetV3-Small ──────────────────
+# Tipo       : CNN (Red Neuronal Convolucional)
+# Disenada por: Google — Howard et al. (2019). ICCV
+# Metodo     : Transfer Learning desde ImageNet (1.2 millones de imagenes)
+# Por que esta red?: es ligera, rapida y precisa para clasificar imagenes
+# Referencia : Afzal et al. (2015). DeepDocClassifier. ICDAR
+#              DOI: 10.1109/ICDAR.2015.7333933
+#
+# QUE ES TRANSFER LEARNING?
+#   En vez de entrenar desde cero (necesitaria millones de imagenes),
+#   usamos una red que YA sabe detectar bordes, texturas y formas.
+#   Solo le ensenamos la diferencia entre Actas y CURPs.
+#
+# ARQUITECTURA — 4 FASES:
+#   Fase 1 — ENTRADA
+#     Imagen de 224x224 pixeles con 3 canales (RGB)
+#     Total de valores de entrada: 224 x 224 x 3 = 150,528
+#
+#   Fase 2 — EXTRACCION DE CARACTERISTICAS (CONGELADA)
+#     16 capas convolucionales que YA estan entrenadas con ImageNet
+#     NO las modificamos. Solo las usamos para extraer informacion.
+#     Parametros congelados: ~2,474,000
+#     Salida: vector de 576 valores que describen la imagen
+#
+#   Fase 3 — CLASIFICADOR FINAL (LO ENTRENAMOS NOSOTROS)
+#     Capa 1: Linear(576 → 256)  reduce de 576 a 256 neuronas
+#     Capa 2: Hardswish()         funcion de activacion no lineal
+#     Capa 3: Dropout(30%)        apaga el 30% de neuronas al azar
+#                                 para evitar que la red memorice
+#     Capa 4: Linear(256 → 2)    produce 2 valores: uno por clase
+#     Parametros entrenados: ~68,000 (solo el 2.7% del total)
+#
+#   Fase 4 — SALIDA
+#     Softmax convierte los 2 valores en probabilidades que suman 100%
+#     Ejemplo: [88% acta_nacimiento | 12% curp]
+
+# Detectamos si hay GPU disponible; si no, usamos el procesador (CPU)
+# GPU = mucho mas rapido para entrenar redes neuronales
+dispositivo = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f'Dispositivo de entrenamiento: {dispositivo}')
+
+# Cargamos MobileNetV3-Small con los pesos pre-entrenados de ImageNet
+# weights=DEFAULT → descarga los pesos oficiales de Google
+modelo = models.mobilenet_v3_small(weights=models.MobileNet_V3_Small_Weights.DEFAULT)
+
+# Congelamos la Fase 2 (las 16 capas de vision)
+# requires_grad=False → le decimos a PyTorch que NO calcule gradientes
+#                       para estos parametros (no los va a modificar)
+for p in modelo.features.parameters():
+    p.requires_grad = False
+
+# Reemplazamos el clasificador original de 1000 clases (ImageNet)
+# por uno nuevo de 2 clases (nuestro problema)
+# Este es el clasificador de la Fase 3
+modelo.classifier = nn.Sequential(
+    nn.Linear(576, 256),  # capa densa: 576 entradas → 256 neuronas
+    nn.Hardswish(),        # activacion: introduce no-linealidad para aprender patrones complejos
+    nn.Dropout(p=0.3),    # regularizacion: apaga el 30% de neuronas en cada iteracion
+    nn.Linear(256, 3)  # 3 clases: actas_nacimiento, curp, otros     # capa de salida: 256 neuronas → 2 valores (uno por clase)
+)
+
+# Mandamos el modelo al dispositivo disponible (GPU o CPU)
+modelo = modelo.to(dispositivo)
+
+
+# ── PASO 4: ENTRENAMIENTO ─────────────────────────────────────
+# CrossEntropyLoss: funcion de perdida para clasificacion
+#   Mide que tan equivocada esta la prediccion vs la etiqueta real
+#   Cuanto mas alto el valor, peor esta prediciendo la red
+criterio = nn.CrossEntropyLoss()
+
+# Adam: optimizador que ajusta los pesos de la red para reducir el error
+#   lr=0.001 → velocidad de aprendizaje (cuanto cambia el peso en cada paso)
+#   filter(requires_grad) → solo optimiza los parametros que NO estan congelados
+optimizador = optim.Adam(filter(lambda p: p.requires_grad, modelo.parameters()), lr=0.001)
+
+# ReduceLROnPlateau: reduce lr a la mitad si la precision no mejora en 5 epocas
+#   Ayuda a encontrar mejores resultados cuando el entrenamiento se estanca
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizador, mode='max', patience=5, factor=0.5)
+
+# Variables de control para el entrenamiento
+mejor_prec  = 0.0   # mejor precision obtenida hasta el momento
+sin_mejora  = 0     # epocas consecutivas sin mejorar
+mejor_pesos = None  # copia de los mejores pesos encontrados
+
+print(f"\n{'Epoca':<8} {'Loss':<12} {'Precision':<12} {'Estado'}")
+print('-' * 45)
+
+# Ciclo de entrenamiento: repetimos 40 veces como maximo
+# Una 'epoca' = la red ve TODAS las imagenes de entrenamiento una vez
+for epoca in range(40):
+
+    # FASE DE ENTRENAMIENTO: la red ajusta sus pesos
+    modelo.train()  # activa capas como Dropout (que solo funcionan en entrenamiento)
+    loss_total = 0.0
+    for imgs, lbls in loader_train:  # procesa un lote de 8 imagenes a la vez
+        imgs, lbls = imgs.to(dispositivo), lbls.to(dispositivo)  # mueve al dispositivo
+        optimizador.zero_grad()               # limpia los gradientes del lote anterior
+        salida = modelo(imgs)                 # la red procesa las 8 imagenes y produce predicciones
+        loss = criterio(salida, lbls)         # compara predicciones vs etiquetas reales
+        loss.backward()                        # calcula como ajustar cada peso (backpropagation)
+        optimizador.step()                     # aplica los ajustes a los pesos
+        loss_total += loss.item()              # acumula el error total de la epoca
+
+    # FASE DE EVALUACION: medimos precision en el conjunto de prueba
+    # No ajustamos pesos aqui, solo predecimos
+    modelo.eval()  # desactiva Dropout para que la red sea deterministica
+    correctas, total = 0, 0
+    with torch.no_grad():  # desactiva el calculo de gradientes (ahorra memoria y tiempo)
+        for imgs, lbls in loader_test:
+            salida = modelo(imgs.to(dispositivo))
+            _, pred = torch.max(salida, 1)     # selecciona la clase con mayor probabilidad
+            total     += lbls.size(0)           # cuenta cuantas imagenes se procesaron
+            correctas += (pred.cpu() == lbls).sum().item()  # cuenta aciertos
+
+    prec = correctas / total  # precision = aciertos / total
+    scheduler.step(prec)      # informa al scheduler sobre la precision actual
+
+    # Si esta es la mejor precision, guardamos una copia de los pesos
+    if prec > mejor_prec:
+        mejor_prec  = prec
+        sin_mejora  = 0
+        # .clone() hace una copia independiente; sin ella, la referencia cambiaria
+        mejor_pesos = {k: v.clone() for k, v in modelo.state_dict().items()}
+        estado = '<- mejor'
+    else:
+        sin_mejora += 1  # contamos una epoca mas sin mejora
+        estado = ''
+
+    print(f'{epoca+1:<8} {loss_total/len(loader_train):<12.4f} {prec*100:<11.1f}% {estado}')
+
+    # Early stopping: si no mejora en 15 epocas seguidas, detenemos el entrenamiento
+    # Evita perder tiempo entrenando cuando la red ya no esta aprendiendo
+    if sin_mejora >= 15:
+        print(f'Early stopping en epoca {epoca+1}: sin mejora por {sin_mejora} epocas')
+        break
+
+# Cargamos los mejores pesos encontrados durante todo el entrenamiento
+modelo.load_state_dict(mejor_pesos)
+modelo.eval()  # dejamos el modelo en modo evaluacion listo para predecir
+print(f'\nMejor precision obtenida en conjunto de prueba: {mejor_prec*100:.1f}%')
+
+# Reporte detallado: precision, recall y F1-score por clase
+# precision → de los que dijo que eran Actas, cuantos si lo eran
+# recall    → de todos los Actas reales, cuantos detecto correctamente
+# F1-score  → promedio armonico entre precision y recall
+preds_all, lbls_all = [], []
+with torch.no_grad():
+    for imgs, lbls in loader_test:
+        _, pred = torch.max(modelo(imgs.to(dispositivo)), 1)
+        preds_all.extend(pred.cpu().numpy())
+        lbls_all.extend(lbls.numpy())
+print(classification_report(lbls_all, preds_all, target_names=list(CLASES.keys())))
+
+# Matriz de confusion:
+# Filas = clase real | Columnas = clase predicha
+# Diagonal = aciertos | Fuera de diagonal = errores
+pd.DataFrame(
+    confusion_matrix(lbls_all, preds_all),
+    index=[f'Real: {n}' for n in CLASES],
+    columns=[f'Pred: {n}' for n in CLASES]
+)
+# ── GUARDAR EL MODELO ENTRENADO ─────────────────────────────────────────
+# Guardamos los pesos aprendidos en un archivo .pth.
+# Los 'pesos' son los numeros que la red aprendio: su memoria.
+# Si los guardamos, la proxima vez no necesitamos volver a entrenar.
+# El archivo queda en: MiDataset/modelo/modelo_barrera1.pth
+# ────────────────────────────────────────────────────────────────────────
+
+ruta_guardado = BASE_DIR / 'modelo' / 'modelo_barrera1.pth'
+torch.save(modelo.state_dict(), ruta_guardado)
+kb = ruta_guardado.stat().st_size / 1024
+print(f'Modelo guardado en: {ruta_guardado}')
+print(f'Tamano del archivo: {kb:.1f} KB')
+print('Para cargarlo despues sin reentrenar, usa:')
+print('  modelo.load_state_dict(torch.load(ruta_guardado))')
+
+
+============================================================
+CELDA 4 | tipo=code | id=03b-barrera-1-aplicar
+============================================================
+# ── PASO 5: APLICAR BARRERA 1 AL DATASET COMPLETO ─────────────
+# Ahora que el modelo ya aprendio, lo usamos para revisar
+# cada documento del dataset y decidir si pasa o falla.
+# Umbral de confianza minimo: 70%
+# Si la red no esta segura al menos un 70%, rechaza el documento
+
+def barrera_1(ruta):
+    # 1. Abre la imagen y la transforma igual que en la prueba
+    tensor = tf_test(Image.open(ruta).convert('RGB')).unsqueeze(0).to(dispositivo)
+    #        tf_test aplica resize y normalizacion
+    #        .unsqueeze(0) agrega dimension de lote: [1, 3, 224, 224]
+    #        .to(dispositivo) mueve al GPU o CPU
+
+    # 2. La red procesa la imagen y produce 2 valores crudos
+    with torch.no_grad():  # no necesitamos gradientes, solo predecir
+        probs = torch.softmax(modelo(tensor), dim=1)[0]
+        #       softmax convierte los 2 valores crudos en probabilidades que suman 100%
+        #       [0] toma el primer (y unico) elemento del lote
+
+    # 3. Identifica la clase ganadora y su nivel de confianza
+    idx  = int(probs.argmax())   # indice del valor mas alto (0 o 1)
+    conf = float(probs.max())    # valor de esa probabilidad (entre 0.0 y 1.0)
+    clase = CLASES_INV[idx]      # convierte 0 → 'actas_nacimiento' o 1 → 'curp'
+
+    # 4. Decide si aprueba o rechaza segun el umbral de 70%
+    if conf < 0.70:
+        return False, clase, conf, (
+            f'BARRERA 1 FALLIDA: tipo de documento no reconocido '
+            f'({conf*100:.1f}% de confianza, minimo requerido: 70%). '
+            f'Sube una imagen mas clara y bien encuadrada.'
+        )
+    return True, clase, conf, f"Documento reconocido como '{clase}' con {conf*100:.1f}% de confianza"
+
+
+# Recorremos TODAS las imagenes del dataset
+b1_res = []
+for _, fila in df.iterrows():  # iterrows() recorre fila por fila el dataframe
+    ruta = BASE_DIR / fila['ruta_imagen']
+    if not ruta.exists(): continue  # si el archivo no existe, lo saltamos
+    ok, clase_pred, conf, msg = barrera_1(ruta)  # aplicamos la barrera
+    b1_res.append({                              # guardamos el resultado
+        'archivo'    : fila.get('nombre_archivo_original', ruta.name),
+        'clase_real' : fila['clase'],
+        'clase_pred' : clase_pred,
+        'confianza_%': round(conf*100, 1),
+        'b1_ok'      : ok,
+        'mensaje'    : msg
+    })
+
+B1 = pd.DataFrame(b1_res)  # convertimos la lista de resultados en tabla
+print(f'BARRERA 1 — Aprobados: {B1["b1_ok"].sum()} | Rechazados: {(~B1["b1_ok"]).sum()} | Total: {len(B1)}')
+print()
+
+# Mostramos los documentos rechazados con el motivo exacto
+rechazados_b1 = B1[~B1['b1_ok']]  # filtra las filas donde b1_ok es False
+if rechazados_b1.empty:
+    print('Todos los documentos superaron la Barrera 1')
+else:
+    for _, r in rechazados_b1.iterrows():
+        print(f'Archivo : {r["archivo"]}')
+        print(f'Mensaje : {r["mensaje"]}\n')
+
+============================================================
+CELDA 5 | tipo=code | id=04-barrera-2
+============================================================
+# =============================================================
+# BARRERA 2 — Calidad visual y orientacion del documento
+# =============================================================
+# QUE HACE ESTA BARRERA?
+#   Verifica que la imagen del documento sea lo suficientemente
+#   nitida y este orientada correctamente.
+#   Solo se aplica a documentos que superaron la Barrera 1.
+#
+# COMO MIDE LA NITIDEZ?
+#   Con el operador Laplaciano: detecta cambios bruscos de intensidad
+#   en la imagen (bordes y texto). Si la varianza es alta → imagen nitida.
+#   Si es baja → imagen borrosa.
+#   Referencia: Alaei et al. (2023). DIQA Survey. ACM. DOI:10.1145/3606692
+#
+# COMO MIDE LA INCLINACION?
+#   Con perfiles de proyeccion horizontal: rota la imagen de -20 a +20
+#   grados y busca el angulo donde las filas de texto estan mas alineadas.
+#   Referencia: DISE-2021. ICIP 2022. arXiv:2603.05942
+#
+# FORMULA DEL SCORE DE CALIDAD:
+#   Score = 0.60 * nitidez_normalizada + 0.40 * contraste_normalizado
+#   Umbral minimo: 0.65 | Angulo maximo permitido: 15 grados
+# =============================================================
+
+import cv2      # OpenCV: libreria de vision por computadora
+import numpy as np  # numpy: operaciones matematicas con matrices de pixeles
+
+def barrera_2(ruta):
+    # Leer la imagen con OpenCV (la lee en formato BGR, no RGB)
+    img  = cv2.imread(str(ruta))
+
+    # Convertir a escala de grises (1 solo canal en vez de 3)
+    # Las medidas de nitidez e inclinacion no necesitan color
+    gris = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    h, w = img.shape[:2]  # h = alto en pixeles | w = ancho en pixeles
+
+    # MEDIDA 1: Nitidez con el operador Laplaciano
+    # Laplaciano detecta bordes; su varianza indica que tan nitida es la imagen
+    # Alto = nitida (bordes bien definidos) | Bajo = borrosa (bordes difusos)
+    nitidez = cv2.Laplacian(gris, cv2.CV_64F).var()
+
+    # MEDIDA 2: Contraste como desviacion estandar de los pixeles
+    # Alto = buena diferencia entre zonas claras y oscuras (texto legible)
+    contraste = float(gris.std())
+
+    # Score final: promedio ponderado de nitidez y contraste
+    # min(..., 1.0) evita que el score supere 1.0
+    # /600 y /80 son los valores maximos esperados para normalizar a 0-1
+    score = round(0.60 * min(nitidez/600.0, 1.0) + 0.40 * min(contraste/80.0, 1.0), 4)
+
+    # VERIFICACION DE ROTACION DE 90 GRADOS
+    # Si el ancho es mucho mayor que el alto, el documento esta girado
+    if w > h * 1.1:
+        return False, score, 90, 'BARRERA 2 FALLIDA: documento girado 90 grados. Sube el documento en posicion vertical.'
+
+    # ESTIMACION DEL ANGULO DE INCLINACION
+    # 1. Binarizamos la imagen (blanco y negro) con umbral automatico (Otsu)
+    _, binaria = cv2.threshold(gris, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
+
+    # 2. Reducimos el tamano 4 veces para que el calculo sea mas rapido
+    small = cv2.resize(binaria, (w//4, h//4))
+    cx, cy = small.shape[1]//2, small.shape[0]//2  # centro de la imagen reducida
+
+    # 3. Probamos angulos de -20 a +20 grados y buscamos el de mayor varianza
+    # Cuando el texto esta bien alineado, las filas tienen mayor contraste entre si
+    mejor_var, mejor_ang = -1, 0
+    for ang in range(-20, 21):
+        # Rotamos la imagen al angulo actual
+        M   = cv2.getRotationMatrix2D((cx,cy), ang, 1.0)
+        rot = cv2.warpAffine(small, M, (small.shape[1], small.shape[0]))
+        # Calculamos la varianza del perfil horizontal (suma de pixeles por fila)
+        v = float(np.var(np.sum(rot, axis=1).astype(float)))
+        if v > mejor_var:
+            mejor_var, mejor_ang = v, ang  # guardamos el mejor angulo
+    angulo = abs(-mejor_ang)  # convertimos a valor positivo
+
+    # Evaluamos los resultados
+    if score < 0.65:
+        return False, score, angulo, f'BARRERA 2 FALLIDA: calidad insuficiente (score {score} < 0.65). Imagen borrosa o con bajo contraste.'
+    if angulo > 15:
+        return False, score, angulo, f'BARRERA 2 FALLIDA: inclinacion excesiva ({angulo} grados > 15). Escanea el documento mas recto.'
+    return True, score, angulo, f'Calidad OK (score {score}) | Inclinacion aceptable: {angulo} grados'
+
+
+# Aplicamos Barrera 2 SOLO a documentos que pasaron la Barrera 1
+# Los que fallaron B1 ya fueron rechazados y no necesitan seguir
+b2_res = []
+for _, fila in df.iterrows():
+    ruta = BASE_DIR / fila['ruta_imagen']
+    if not ruta.exists(): continue
+    nombre = fila.get('nombre_archivo_original', ruta.name)
+    # Verificamos que el documento este en la lista de aprobados de B1
+    if nombre not in B1[B1['b1_ok']]['archivo'].values: continue
+    ok, score, angulo, msg = barrera_2(ruta)
+    b2_res.append({
+        'archivo'      : nombre,
+        'clase_real'   : fila['clase'],
+        'score_calidad': score,
+        'angulo_grados': angulo,
+        'b2_ok'        : ok,
+        'mensaje'      : msg
+    })
+
+B2 = pd.DataFrame(b2_res)
+print(f'BARRERA 2 — Aprobados: {B2["b2_ok"].sum()} | Rechazados: {(~B2["b2_ok"]).sum()} | Total: {len(B2)}')
+print()
+
+# Mostramos los documentos rechazados con el motivo exacto
+rechazados_b2 = B2[~B2['b2_ok']]
+if rechazados_b2.empty:
+    print('Todos los documentos superaron la Barrera 2')
+else:
+    for _, r in rechazados_b2.iterrows():
+        print(f'Archivo : {r["archivo"]}')
+        print(f'Score   : {r["score_calidad"]} | Angulo: {r["angulo_grados"]} grados')
+        print(f'Mensaje : {r["mensaje"]}\n')
+
+============================================================
+CELDA 6 | tipo=code | id=05-barrera-3
+============================================================
+# =============================================================
+# BARRERA 3 — Digitalizacion Estructurada (OCR) y KIE
+# (Key Information Extraction)
+# =============================================================
+#
+# FUNDAMENTO CIENTIFICO Y JUSTIFICACION (Módulos D, E y F del Proyecto)
+#
+#   Esta barrera no solo lee texto (OCR), sino que extrae "Significado".
+#   Convierte pixeles en entidades estructuradas (ej: el codigo CURP).
+#
+# ¿Que se mejoro en esta version? (Implementacion de estado del arte):
+#
+#   MEJORA 1: Preprocesamiento de Imagen (Computer Vision)
+#     El OCR falla si la imagen tiene sombras. Implementamos CLAHE
+#     (Contrast Limited Adaptive Histogram Equalization) y binarizacion
+#     de Otsu para estabilizar el contraste antes de leer.
+#     -> Ref: Reza, A. M. (2004). Realization of the Contrast Limited Adaptive
+#             Histogram Equalization. IEEE Transactions on Image Processing.
+#
+#   MEJORA 2: Filtrado por Confianza (Confidence Thresholding)
+#     Rechazamos predicciones del modelo OCR menores a 30% de certeza.
+#     Esto evita que el sistema "invente" palabras a partir de manchas.
+#
+#   MEJORA 3: Correccion de Confusiones Morfologicas
+#     Las Redes Neuronales de OCR confunden letras parecidas (O vs 0, 1 vs I).
+#     Implementamos un algoritmo heuristico de correccion contextual.
+#     -> Ref: Chaudhuri et al. (2017). Optical Character Recognition Systems.
+#             (Seccion de Post-procesamiento y NLP)
+#
+#   MEJORA 4: KIE Basado en Expresiones Regulares (Regex)
+#     Para el CURP, usamos un patron matematico que define la estructura
+#     oficial de RENAPO (4 letras, 6 numeros, 6 letras, 2 alfanumericos).
+#     -> Ref: Implementacion hibrida (Reglas + IA) sugerida en el Módulo G
+#             del documento rector del proyecto.
+# =============================================================
+
+import re
+import cv2
+import easyocr
+
+# Inicializar el motor EasyOCR (Módulo E del proyecto)
+# ['es', 'en'] → soporte multilingue
+# gpu=False    → para compatibilidad universal (ejecutable en CPU)
+lector_ocr = easyocr.Reader(['es', 'en'], gpu=False)
+
+
+def preprocesar_para_ocr(ruta):
+    """
+    Aplica tecnicas de Computer Vision para maximizar la legibilidad del documento.
+    Transforma una imagen degradada en un mapa binario optimo para el motor OCR.
+    """
+    img = cv2.imread(str(ruta))
+
+    # 1. Escala de grises: Simplifica el canal de color a intensidad luminica
+    gris = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # 2. CLAHE: Estabiliza sombras desiguales causadas por mala iluminacion del escaner
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    gris  = clahe.apply(gris)
+
+    # 3. Desenfoque Gaussiano: Suaviza la imagen para eliminar ruido de alta frecuencia (granulado)
+    suavizado = cv2.GaussianBlur(gris, (3, 3), 0)
+
+    # 4. Umbralizacion de Otsu: Algoritmo estadistico que calcula automaticamente el mejor
+    # umbral para separar el texto negro del fondo blanco, sin importar las condiciones de luz.
+    _, binaria = cv2.threshold(suavizado, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    return binaria
+
+
+def corregir_confusion_ocr(texto):
+    """
+    Generador de variantes linguisticas.
+    Mitiga el "Error de Sustitucion" clasico en modelos OCR cuando enfrentan
+    tipografias deterioradas o resoluciones bajas.
+    """
+    variantes = [texto]
+
+    # Variante 1: Asumimos que los ceros eran 'O's, unos eran 'I's.
+    # Util para extraer la seccion alfabetica inicial del CURP.
+    v1 = texto.replace('0', 'O').replace('1', 'I').replace('5', 'S').replace('8', 'B')
+    variantes.append(v1)
+
+    # Variante 2: Inversa. Asumimos que las 'O's eran ceros.
+    # Util para extraer la seccion de fecha de nacimiento (numerica) del CURP.
+    v2 = texto.replace('O', '0').replace('I', '1').replace('S', '5')
+    variantes.append(v2)
+
+    # Variante 3: Limpieza estructural extrema (eliminacion de espacios y falsas Q/L)
+    v3 = v1.replace(' ', '').replace('Q', 'O').replace('L', 'I')
+    variantes.append(v3)
+
+    return variantes
+
+
+# Regla de extraccion determinista para el CURP Mexicano
+PATRON_CURP = re.compile(
+    r'[A-Z]{4}[0-9]{6}[HM][A-Z]{2}[B-DF-HJ-NP-TV-Z]{3}[A-Z0-9][0-9]'
+)
+
+# Ontologia base para identificar Actas de Nacimiento
+CAMPOS_ACTA = {
+    'ACTA'       : ['ACTA', 'ACTA.', 'ACT4'],
+    'NACIMIENTO' : ['NACIMIENTO', 'NACI MIENTO', 'NACIM1ENTO', 'NACIMI ENTO'],
+    'NOMBRE'     : ['NOMBRE', 'N0MBRE', 'NOMBR'],
+    'FECHA'      : ['FECHA', 'FECH4', 'F ECHA'],
+    'MUNICIPIO'  : ['MUNICIPIO', 'MUNICI PIO', 'MUNIC1PIO', 'MPIO'],
+}
+
+
+def barrera_3(ruta, clase_documento):
+    """
+    Ejecuta el flujo completo de inferencia textual y validacion de campos.
+    Esta funcion representa el "Modulo G (KIE)" del proyecto.
+    """
+    # Fase 1: Optimizacion de la fuente visual
+    img_mejorada = preprocesar_para_ocr(ruta)
+
+    # Fase 2: Inferencia de red neuronal profunda (OCR)
+    resultados = lector_ocr.readtext(img_mejorada, detail=1)
+
+    if not resultados:
+        return False, 0.0, [], 'BARRERA 3 FALLIDA: Documento ilegible computacionalmente.'
+
+    # Fase 3: Filtrado estadistico (Solo mantener certidumbre >= 30%)
+    textos_confiables = [(det[1], det[2]) for det in resultados if det[2] >= 0.30]
+
+    if not textos_confiables:
+        return False, 0.0, [], 'BARRERA 3 FALLIDA: Texto descartado por baja confiabilidad estadistica.'
+
+    # Metrica de calidad global del documento
+    confianza_promedio = round(sum(c for _, c in textos_confiables) / len(textos_confiables), 3)
+
+    # Normalizacion semantica a mayusculas
+    texto_completo = ' '.join([t for t, _ in textos_confiables]).upper()
+
+    # Fase 4: Analisis de extraccion de informacion (KIE)
+    if clase_documento == 'curp':
+        # Proyectamos el espacio de busqueda generando variantes tolerantes a ruido
+        variantes = corregir_confusion_ocr(texto_completo)
+        curp_encontrado = None
+
+        for variante in variantes:
+            match = PATRON_CURP.search(variante)
+            if match:
+                curp_encontrado = match.group(0)
+                break
+
+        if curp_encontrado:
+            return (
+                True,
+                confianza_promedio,
+                [curp_encontrado],
+                f'CURP verificado: {curp_encontrado} | Precisión OCR: {confianza_promedio*100:.1f}%'
+            )
+        else:
+            return (
+                False,
+                confianza_promedio,
+                [],
+                f'BARRERA 3 FALLIDA: Ausencia de sintaxis CURP. Confianza: {confianza_promedio*100:.1f}%'
+            )
+
+    elif clase_documento == 'actas_nacimiento':
+        # Verificacion ontologica de metadatos
+        hallados  = []
+        faltantes = []
+
+        for campo, variantes_campo in CAMPOS_ACTA.items():
+            if any(v in texto_completo for v in variantes_campo):
+                hallados.append(campo)
+            else:
+                faltantes.append(campo)
+
+        if len(faltantes) >= 2:
+            return (
+                False,
+                confianza_promedio,
+                hallados,
+                f'BARRERA 3 FALLIDA: Carencia de metadatos estructurales {faltantes}.'
+            )
+        else:
+            return (
+                True,
+                confianza_promedio,
+                hallados,
+                f'Topologia de Acta confirmada: {hallados} | Confianza OCR: {confianza_promedio*100:.1f}%'
+            )
+
+    return False, 0.0, [], f'BARRERA 3 FALLIDA: Clase fuera de dominio: {clase_documento}'
+
+
+# =============================================================
+# PIPELINE DE EJECUCION
+# Aplica el modelo unicamente al subconjunto que supero B2.
+# =============================================================
+b3_res = []
+aprobados_b2 = set(B2[B2['b2_ok']]['archivo'])
+
+for _, fila in df.iterrows():
+    ruta = BASE_DIR / fila['ruta_imagen']
+    if not ruta.exists(): continue
+    nombre = fila.get('nombre_archivo_original', ruta.name)
+    if nombre not in aprobados_b2: continue
+
+    # Integracion inter-modular: B3 necesita la prediccion de B1
+    fila_b1 = B1[B1['archivo'] == nombre]
+    if fila_b1.empty: continue
+    clase_pred = fila_b1.iloc[0]['clase_pred']
+
+    ok, conf_ocr, campos, msg = barrera_3(ruta, clase_pred)
+    b3_res.append({
+        'archivo'           : nombre,
+        'clase_pred'        : clase_pred,
+        'confianza_ocr_%'   : round(conf_ocr * 100, 1),
+        'campos_hallados'   : str(campos),
+        'b3_ok'             : ok,
+        'mensaje'           : msg
+    })
+
+B3 = pd.DataFrame(b3_res)
+print(f'BARRERA 3 — Aprobados: {B3["b3_ok"].sum()} | Rechazados: {(~B3["b3_ok"]).sum()} | Total: {len(B3)}')
+print(f'Confianza OCR promedio del corpus: {B3["confianza_ocr_%"].mean():.1f}%')
+print()
+
+rechazados_b3 = B3[~B3['b3_ok']]
+if rechazados_b3.empty:
+    print('Validacion estructural completada exitosamente.')
+else:
+    for _, r in rechazados_b3.iterrows():
+        print(f'Archivo : {r["archivo"]}')
+        print(f'Prec.OCR: {r["confianza_ocr_%"]}%')
+        print(f'Detalle : {r["mensaje"]}\n')
+
+============================================================
+CELDA 7 | tipo=code | id=07-barrera-5
+============================================================
+# =============================================================
+# BARRERA 5 — Correspondencia alumno-documento (PENDIENTE)
+# =============================================================
+# QUE HARA ESTA BARRERA?
+#   Verificara que el documento pertenece al alumno que lo subio.
+#   Extraera el nombre del documento con OCR y lo comparara
+#   contra la base de datos escolar usando similitud de texto.
+#
+# TECNOLOGIA: OCR + distancia de Levenshtein (umbral >= 90%)
+#   Levenshtein mide cuantos caracteres hay que cambiar para
+#   que dos textos sean iguales. 90% = muy parecidos.
+# REFERENCIA: Shi & Jain (2019). DocFace+. IEEE TBIOM.
+#             DOI: 10.1109/TBIOM.2019.2897807
+# =============================================================
+print('BARRERA 5 — Correspondencia alumno-documento: PENDIENTE')
+
+============================================================
+CELDA 8 | tipo=code | id=08-resultado-final
+============================================================
+# =============================================================
+# RESULTADO FINAL DEL PIPELINE
+# Un documento es VALIDO si supera TODAS las barreras implementadas
+# Aprobados → buzon de Control Escolar
+# Rechazados → regresan al alumno con el mensaje de por que fallo
+# =============================================================
+
+# Conjuntos de archivos que pasaron cada barrera
+aprobados_b1 = set(B1[B1['b1_ok']]['archivo'])
+aprobados_b2 = set(B2[B2['b2_ok']]['archivo']) if len(B2) > 0 else set()
+
+# Un documento es valido solo si paso B1 Y B2 (interseccion de conjuntos)
+validos    = len(aprobados_b1 & aprobados_b2)
+rechazados = len(B1) - validos
+
+print('=' * 55)
+print(f'  DOCUMENTOS VALIDOS   : {validos}')
+print(f'  DOCUMENTOS RECHAZADOS: {rechazados}')
+print(f'  TOTAL PROCESADOS     : {len(B1)}')
+print('=' * 55)
+print()
+print('VALIDOS   → se remiten al buzon de Control Escolar')
+print('RECHAZADOS → se devuelven al alumno con el motivo del rechazo')
+
+============================================================
+CELDA 9 | tipo=code | id=c42c5599-c434-4258-9628-b9c4c69d62d0
+============================================================
+
+
+============================================================
+CELDA 10 | tipo=markdown | id=
+============================================================
+---
+# METRICAS CIENTIFICAS — Evaluacion Formal del Sistema
+### Sprint 9 | F1-Score · Matriz de Confusion · CER · WER · ROC-AUC
+---
+Este bloque evalua el rendimiento del sistema de validacion documental usando el **conjunto de prueba (test)**,
+es decir, documentos que el modelo nunca vio durante el entrenamiento.
+
+**Referencias cientificas:**
+- Noguti et al. (2020). Legal Document Classification. *arXiv:2010.12533*
+- Nagaonkar et al. (2025). Benchmarking VLMs on OCR (CER/WER). *arXiv:2502.06445*
+- Saifullah et al. (2024). DocXplain Document Classification. *arXiv:2407.03830*
+
+============================================================
+CELDA 11 | tipo=code | id=
+============================================================
+# ============================================================= #
+# INSTALACION DE DEPENDENCIAS PARA METRICAS                     #
+# Ejecutar solo la primera vez                                  #
+# ============================================================= #
+import subprocess, sys
+
+paquetes = ['scikit-learn', 'matplotlib', 'seaborn', 'jiwer']
+for paq in paquetes:
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', paq, '-q'])
+
+print('Dependencias instaladas correctamente')
+
+============================================================
+CELDA 12 | tipo=code | id=
+============================================================
+# ============================================================= #
+# METRICA 1 — F1-SCORE Y REPORTE COMPLETO (BARRERA 1 — CNN)    #
+# Evalua que tan bien clasifica el modelo CURP vs Acta          #
+# ============================================================= #
+import os, torch
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from torchvision import models, transforms, datasets
+from torch.utils.data import DataLoader
+from sklearn.metrics import (
+    classification_report, confusion_matrix,
+    f1_score, precision_score, recall_score, accuracy_score
+)
+
+# --- Configuracion de rutas ---
+RUTA_TEST   = r'../dataset/test'
+RUTA_MODELO = r'../api/modelo_barrera1.pth'
+CLASES      = ['actas_nacimiento', 'curp']
+DEVICE      = torch.device('cpu')
+
+# --- Preprocesamiento (identico al entrenamiento) ---
+transform_test = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize(
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225]
+    )
+])
+
+# --- Cargar dataset de prueba ---
+test_dataset = datasets.ImageFolder(RUTA_TEST, transform=transform_test)
+test_loader  = DataLoader(test_dataset, batch_size=16, shuffle=False)
+print(f'Imagenes de prueba cargadas: {len(test_dataset)}')
+print(f'Clases detectadas:           {test_dataset.classes}')
+
+# --- Cargar modelo entrenado ---
+# IMPORTANTE: La arquitectura debe coincidir exactamente con el entrenamiento
+modelo = models.mobilenet_v3_small(weights=None)
+modelo.classifier = torch.nn.Sequential(
+    torch.nn.Linear(576, 256),
+    torch.nn.Hardswish(),
+    torch.nn.Dropout(p=0.2),
+    torch.nn.Linear(256, 3)  # 3 clases: actas_nacimiento, curp, otros
+)
+modelo.load_state_dict(torch.load(RUTA_MODELO, map_location=DEVICE))
+modelo.eval()
+print('Modelo cargado correctamente')
+
+# --- Inferencia en todas las imagenes de prueba ---
+y_real      = []
+y_predicho  = []
+y_confianza = []
+
+with torch.no_grad():
+    for imagenes, etiquetas in test_loader:
+        salidas      = modelo(imagenes)
+        probs        = torch.softmax(salidas, dim=1)
+        predicciones = torch.argmax(probs, dim=1)
+        confianza    = torch.max(probs, dim=1).values
+
+        y_real.extend(etiquetas.numpy())
+        y_predicho.extend(predicciones.numpy())
+        y_confianza.extend(confianza.numpy())
+
+# --- Calcular metricas globales ---
+acc  = accuracy_score(y_real, y_predicho)
+f1   = f1_score(y_real, y_predicho, average='macro')
+prec = precision_score(y_real, y_predicho, average='macro')
+rec  = recall_score(y_real, y_predicho, average='macro')
+
+print('\n==========================================')
+print('   METRICAS BARRERA 1 — CLASIFICADOR CNN')
+print('==========================================')
+print(f'  Exactitud  (Accuracy):  {acc:.4f}  ({acc*100:.2f} porciento)')
+print(f'  Precision  (Macro):     {prec:.4f}')
+print(f'  Recall     (Macro):     {rec:.4f}')
+print(f'  F1-Score   (Macro):     {f1:.4f}')
+print('\nReporte completo por clase:')
+print(classification_report(y_real, y_predicho, target_names=CLASES))
+
+============================================================
+CELDA 13 | tipo=code | id=
+============================================================
+# ============================================================= #
+# METRICA 2 — GRAFICA DE LA MATRIZ DE CONFUSION                 #
+# Muestra cuantos documentos clasifico bien/mal por clase        #
+# ============================================================= #
+
+cm = confusion_matrix(y_real, y_predicho)
+
+fig, ax = plt.subplots(figsize=(7, 5))
+sns.heatmap(
+    cm,
+    annot=True,
+    fmt='d',
+    cmap='Blues',
+    xticklabels=CLASES,
+    yticklabels=CLASES,
+    linewidths=0.5,
+    linecolor='gray',
+    ax=ax
+)
+ax.set_title('Matriz de Confusion — Barrera 1 (MobileNetV3)', fontsize=14, fontweight='bold', pad=12)
+ax.set_xlabel('Clase Predicha', fontsize=12)
+ax.set_ylabel('Clase Real',     fontsize=12)
+
+# Agregar porcentajes en cada celda
+total = cm.sum()
+for i in range(cm.shape[0]):
+    for j in range(cm.shape[1]):
+        pct = cm[i, j] / total * 100
+        ax.text(j + 0.5, i + 0.72, f'({pct:.1f} pct)',
+                ha='center', va='center', fontsize=9, color='dimgray')
+
+plt.tight_layout()
+plt.savefig('matriz_confusion_barrera1.png', dpi=150, bbox_inches='tight')
+plt.show()
+print('Grafica guardada como: matriz_confusion_barrera1.png')
+
+# Interpretacion
+VP = cm[1, 1]  # CURP correctamente identificada
+VN = cm[0, 0]  # Acta correctamente identificada
+FP = cm[0, 1]  # Acta confundida con CURP
+FN = cm[1, 0]  # CURP confundida con Acta
+print(f'\nInterpretacion:')
+print(f'  Documentos clasificados correctamente:  {VP + VN} de {total}')
+print(f'  CURPs clasificadas como Acta (FN):      {FN}')
+print(f'  Actas clasificadas como CURP (FP):      {FP}')
+
+============================================================
+CELDA 14 | tipo=code | id=
+============================================================
+# ============================================================= #
+# METRICA 3 — CURVA ROC Y AUC-ROC                              #
+# Evalua el clasificador en todos los umbrales de confianza     #
+# Un AUC cercano a 1.0 indica un clasificador excelente         #
+# ============================================================= #
+from sklearn.metrics import roc_curve, auc
+
+# Obtener probabilidad de la clase positiva (CURP = indice 1)
+y_scores = []
+with torch.no_grad():
+    for imagenes, _ in test_loader:
+        salidas = modelo(imagenes)
+        probs   = torch.softmax(salidas, dim=1)
+        y_scores.extend(probs[:, 1].numpy())
+
+fpr, tpr, thresholds = roc_curve(y_real, y_scores)
+roc_auc = auc(fpr, tpr)
+
+fig, ax = plt.subplots(figsize=(7, 5))
+ax.plot(fpr, tpr, color='steelblue', lw=2,
+        label=f'Curva ROC (AUC = {roc_auc:.4f})')
+ax.plot([0, 1], [0, 1], color='gray', linestyle='--', label='Clasificador aleatorio')
+ax.fill_between(fpr, tpr, alpha=0.1, color='steelblue')
+ax.set_xlim([0.0, 1.0])
+ax.set_ylim([0.0, 1.05])
+ax.set_xlabel('Tasa de Falsos Positivos (FPR)', fontsize=12)
+ax.set_ylabel('Tasa de Verdaderos Positivos (TPR)', fontsize=12)
+ax.set_title('Curva ROC — Barrera 1 (MobileNetV3)', fontsize=14, fontweight='bold')
+ax.legend(loc='lower right', fontsize=11)
+ax.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.savefig('curva_roc_barrera1.png', dpi=150, bbox_inches='tight')
+plt.show()
+print(f'AUC-ROC obtenido: {roc_auc:.4f}')
+print('Un valor cercano a 1.0 indica clasificador excelente')
+print('Grafica guardada como: curva_roc_barrera1.png')
+
+============================================================
+CELDA 15 | tipo=code | id=
+============================================================
+# ============================================================= #
+# METRICA 4 — CER Y WER DEL OCR (BARRERA 3 — EasyOCR)          #
+# CER = Character Error Rate: errores a nivel de caracter        #
+# WER = Word Error Rate:      errores a nivel de palabra         #
+# Referencia: Nagaonkar et al. (2025) arXiv:2502.06445           #
+# ============================================================= #
+from jiwer import cer, wer
+
+# INSTRUCCION:
+# En 'ground_truth' escribe el texto REAL del documento (como aparece impreso).
+# En 'hipotesis_ocr' escribe el texto que genero EasyOCR al leer ese documento.
+# Agrega tantos pares como documentos de prueba tengas disponibles.
+
+ground_truth = [
+    'AUHD051210HHGGRGA6',
+    'CURP AUHD051210HHGGRGA6 DIEGO AGUILAR HERNANDEZ',
+    'ACTA DE NACIMIENTO MUNICIPIO DE PACHUCA ESTADO DE HIDALGO',
+    'NOMBRE PRIMER APELLIDO SEGUNDO APELLIDO',
+]
+
+hipotesis_ocr = [
+    'AUHD051210HHGGRGA6',
+    'CURP AUHD0S1210HHGGRGA6 DIEGO AGUILAR HERNANDEZ',
+    'ACTA DE NACIMIENTO MUNICIPIO DE PACHUCA ESTADO DE HIDALG0',
+    'N0MBRE PR1MER APELL1DO SEGUNDO APELLIDO',
+]
+
+# --- Calcular metricas globales ---
+cer_total = cer(ground_truth, hipotesis_ocr)
+wer_total = wer(ground_truth, hipotesis_ocr)
+
+print('========================================')
+print('   METRICAS OCR — BARRERA 3 (EasyOCR)')
+print('========================================')
+print(f'  CER Global (Character Error Rate): {cer_total:.4f}  ({cer_total * 100:.2f} porciento)')
+print(f'  WER Global (Word Error Rate):      {wer_total:.4f}  ({wer_total * 100:.2f} porciento)')
+print()
+print(f'  Interpretacion:')
+print(f'    De cada 100 caracteres, el OCR comete {cer_total * 100:.1f} errores')
+print(f'    De cada 100 palabras,   el OCR comete {wer_total * 100:.1f} errores')
+print()
+
+# Referencia de umbral profesional (Nagaonkar et al., 2025)
+umbral = 0.05
+if cer_total < umbral:
+    print(f'  RESULTADO: CER dentro del estandar profesional (menos de 5 porciento)')
+else:
+    print(f'  RESULTADO: CER supera el 5 porciento — considerar mejorar preprocesamiento')
+
+# --- Grafica CER y WER por documento ---
+cer_por_doc = [cer([gt], [hip]) for gt, hip in zip(ground_truth, hipotesis_ocr)]
+wer_por_doc = [wer([gt], [hip]) for gt, hip in zip(ground_truth, hipotesis_ocr)]
+etiquetas   = [f'Doc {i+1}' for i in range(len(ground_truth))]
+x = list(range(len(ground_truth)))
+
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.bar([i - 0.2 for i in x], cer_por_doc, width=0.38, label='CER', color='steelblue')
+ax.bar([i + 0.2 for i in x], wer_por_doc, width=0.38, label='WER', color='coral')
+ax.axhline(y=0.05, color='green', linestyle='--', label='Umbral optimo CER (5 pct)')
+ax.set_xticks(x)
+ax.set_xticklabels(etiquetas)
+ax.set_ylabel('Tasa de Error')
+ax.set_title('CER y WER por Documento — EasyOCR (Barrera 3)', fontweight='bold')
+ax.legend()
+ax.grid(axis='y', alpha=0.3)
+plt.tight_layout()
+plt.savefig('cer_wer_barrera3.png', dpi=150, bbox_inches='tight')
+plt.show()
+print('Grafica guardada como: cer_wer_barrera3.png')
+
+============================================================
+CELDA 16 | tipo=code | id=
+============================================================
+# ============================================================= #
+# RESUMEN FINAL — TABLA DE METRICAS COMPLETA DEL SISTEMA        #
+# ============================================================= #
+
+print('=' * 58)
+print('   RESUMEN DE METRICAS CIENTIFICAS DEL SISTEMA')
+print('   Sistema de Validacion Documental con IA')
+print('   Sprint 9 — Agosto 2026')
+print('=' * 58)
+print()
+print('BARRERA 1 — Clasificador CNN (MobileNetV3-Small)')
+print(f'  Exactitud  (Accuracy): {acc * 100:.2f} porciento')
+print(f'  Precision  (Macro):    {prec * 100:.2f} porciento')
+print(f'  Recall     (Macro):    {rec * 100:.2f} porciento')
+print(f'  F1-Score   (Macro):    {f1 * 100:.2f} porciento')
+print(f'  AUC-ROC:               {roc_auc:.4f}')
+print()
+print('BARRERA 3 — OCR (EasyOCR + Regex RENAPO)')
+print(f'  CER (Character Error Rate): {cer_total * 100:.2f} porciento')
+print(f'  WER (Word Error Rate):      {wer_total * 100:.2f} porciento')
+print()
+print('Graficas generadas:')
+print('  > matriz_confusion_barrera1.png')
+print('  > curva_roc_barrera1.png')
+print('  > cer_wer_barrera3.png')
+print()
+print('Referencias:')
+print('  Noguti et al. (2020). arXiv:2010.12533')
+print('  Nagaonkar et al. (2025). arXiv:2502.06445')
+print('  Saifullah et al. (2024). arXiv:2407.03830')

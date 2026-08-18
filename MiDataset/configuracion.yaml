@@ -1,0 +1,32 @@
+dataset:
+  nombre: Dataset-Documentos-Institucionales
+  version: '2.0'
+  descripcion: Actas de nacimiento y CURP escaneados para clasificar con IA
+clases:
+- id: 0
+  nombre: actas_nacimiento
+  codigo: ACT
+  descripcion: Actas de nacimiento emitidas por el Registro Civil
+- id: 1
+  nombre: curp
+  codigo: CUR
+  descripcion: Clave Unica de Registro de Poblacion (RENAPO)
+- id: 2
+  nombre: otros
+  codigo: OTR
+  descripcion: Documentos no reconocidos (INE, pasaporte, comprobantes, etc.)
+carpetas:
+  originales: 01_datos_originales
+  convertidas: 02_imagenes_convertidas
+  aumentadas: 03_imagenes_aumentadas
+  informacion: 04_informacion_documentos
+  reportes: 05_reportes
+  registros: registros
+conversion:
+  dpi: 300
+  formato: png
+calidad:
+  puntuacion_minima: 0.65
+  puntuacion_buena: 0.8
+aumento:
+  copias_por_imagen: 5

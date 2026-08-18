@@ -1,0 +1,381 @@
+
+
+:root {
+    /* Fondos globales y contenedores esmerilados (Glassmorphism) */
+    --bg-gradient: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+    --card-bg: rgba(255, 255, 255, 0.9); /* Transparencia para permitir desenfoque posterior */
+    --card-border: rgba(255, 255, 255, 0.6); /* Borde semitransparente para efecto cristal */
+    --text-primary: #1e293b; /* Slate-800: Texto principal de alto contraste */
+    --text-secondary: #64748b; /* Slate-500: Texto secundario y etiquetas auxiliares */
+    
+    /* Paleta de colores Premium (Marca e Identidad IA) */
+    --primary: #4f46e5; /* Índigo primario */
+    --primary-gradient: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); /* Gradiente dinámico violáceo */
+    --primary-hover: #4338ca; /* Estado hover primario */
+    
+    /* Tokens semánticos de estado (Aprobado, Rechazado, Pendiente) */
+    --success: #10b981;
+    --success-light: #d1fae5;
+    --success-dark: #065f46;
+    --danger: #ef4444;
+    --danger-light: #fee2e2;
+    --danger-dark: #991b1b;
+    --warning: #f59e0b;
+    --warning-light: #fef3c7;
+    --warning-dark: #92400e;
+    
+    /* Estructura de bordes y sombras multicapa */
+    --border-color: #e2e8f0;
+    --shadow-sm: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+    --shadow-md: 0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    --shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.05), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+* {
+    /* Incluye padding y border en el cálculo del ancho total del elemento */
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    font-family: 'Outfit', sans-serif;
+}
+
+body {
+    background: var(--bg-gradient);
+    color: var(--text-primary);
+    min-height: 100vh;
+    padding: 3rem 2rem;
+    display: flex;
+    justify-content: center; /* Centrado horizontal del contenedor principal */
+}
+
+.container {
+    width: 100%;
+    max-width: 1200px; /* Límite máximo de ancho para pantallas grandes */
+}
+
+header {
+    margin-bottom: 3rem;
+    text-align: center;
+}
+
+header h1 {
+    font-size: 2.6rem;
+    font-weight: 700;
+    background: var(--primary-gradient);
+    
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 0.5rem;
+    letter-spacing: -0.5px;
+}
+
+header p {
+    color: var(--text-secondary);
+    font-size: 1.1rem;
+    font-weight: 300;
+}
+
+.tabs {
+    display: inline-flex;
+    background: rgba(255, 255, 255, 0.5);
+    /* backdrop-filter aplica desenfoque gaussiano en vivo al contenido que pasa por detrás */
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px); /* Compatibilidad con Safari / WebKit */
+    border: 1px solid var(--card-border);
+    padding: 0.4rem;
+    border-radius: 30px;
+    margin-bottom: 2rem;
+    box-shadow: var(--shadow-sm);
+}
+
+.tab-btn {
+    background: none;
+    border: none;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    padding: 0.7rem 2rem;
+    cursor: pointer;
+    border-radius: 25px;
+    
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.tab-btn:hover {
+    color: var(--text-primary);
+}
+
+.tab-btn.active {
+    background: var(--primary-gradient);
+    color: white;
+    box-shadow: 0 4px 10px rgba(79, 70, 229, 0.3);
+}
+
+.tab-content {
+    display: none;
+    background: var(--card-bg);
+    /* Fondo esmerilado de mayor densidad para las tarjetas principales */
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--card-border);
+    padding: 3rem;
+    border-radius: 24px;
+    box-shadow: var(--shadow-lg);
+    animation: fadeIn 0.4s ease;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+/* Animación de entrada suave para el cambio de pestañas */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+h2 {
+    font-size: 1.6rem;
+    font-weight: 700;
+    margin-bottom: 2rem;
+    color: #0f172a;
+    position: relative;
+    padding-bottom: 0.5rem;
+}
+
+/* Pseudoelemento para generar la línea decorativa inferior de los títulos */
+h2::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 60px;
+    height: 4px;
+    background: var(--primary-gradient);
+    border-radius: 2px;
+}
+
+.form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+    margin-bottom: 2.5rem;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+.form-group.full-width {
+    grid-column: span 2; /* Ocupa las dos columnas del grid de formulario */
+}
+
+label {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #475569;
+}
+
+input[type="text"], input[type="number"], select {
+    width: 100%;
+    padding: 0.9rem 1.2rem;
+    border: 1.5px solid var(--border-color);
+    border-radius: 12px;
+    font-size: 1rem;
+    outline: none;
+    transition: all 0.3s;
+    background-color: #fafbfc;
+}
+
+input:focus, select:focus {
+    border-color: var(--primary);
+    background-color: white;
+    /* Anillo de enfoque accesible y estético mediante boxShadow */
+    box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.1);
+}
+
+.file-upload-box {
+    border: 2px dashed var(--border-color);
+    padding: 2.5rem 1.5rem;
+    text-align: center;
+    border-radius: 16px;
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    background-color: #f8fafc;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.8rem;
+}
+
+.file-upload-box:hover {
+    border-color: var(--primary);
+    background-color: #f5f3ff;
+    transform: translateY(-2px);
+}
+
+/* Oculta el input HTML de archivo nativo para estilizar visualmente el contenedor */
+.file-upload-box input {
+    display: none;
+}
+
+.file-upload-box svg {
+    width: 48px;
+    height: 48px;
+    color: #94a3b8;
+    transition: color 0.3s;
+}
+
+.file-upload-box:hover svg {
+    color: var(--primary);
+}
+
+.file-upload-box span {
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    font-weight: 500;
+}
+
+.submit-btn {
+    background: var(--primary-gradient);
+    color: white;
+    border: none;
+    padding: 1.1rem 2rem;
+    border-radius: 14px;
+    font-size: 1.1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s;
+    width: 100%;
+    box-shadow: 0 4px 15px rgba(79, 70, 229, 0.3);
+}
+
+.submit-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(79, 70, 229, 0.4);
+}
+
+.submit-btn:active {
+    transform: translateY(1px); /* Retroalimentación táctil al presionar */
+}
+
+.admin-table-container {
+    overflow-x: auto; /* Permite scroll horizontal en pantallas estrechas */
+    border-radius: 16px;
+    border: 1px solid var(--border-color);
+    background: white;
+    box-shadow: var(--shadow-sm);
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+}
+
+th, td {
+    padding: 1.2rem 1.5rem;
+    font-size: 0.95rem;
+}
+
+th {
+    background-color: #f8fafc;
+    color: #475569;
+    font-weight: 700;
+    border-bottom: 2px solid var(--border-color);
+    text-transform: uppercase;
+    font-size: 0.8rem;
+    letter-spacing: 0.5px; /* Mejora la legibilidad de cabeceras en mayúsculas */
+}
+
+td {
+    border-bottom: 1px solid var(--border-color);
+    vertical-align: middle;
+}
+
+tr:last-child td {
+    border-bottom: none;
+}
+
+tr:hover td {
+    background-color: #fcfdfe; /* Destaca la fila actual al pasar el cursor */
+}
+
+.badge {
+    padding: 0.4rem 0.8rem;
+    border-radius: 30px;
+    font-weight: 700;
+    font-size: 0.8rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+
+.badge-success { background-color: var(--success-light); color: var(--success-dark); }
+.badge-danger { background-color: var(--danger-light); color: var(--danger-dark); }
+.badge-warning { background-color: var(--warning-light); color: var(--warning-dark); }
+
+.btn-action {
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: all 0.2s;
+}
+
+.btn-approve {
+    background-color: #ecfdf5;
+    color: var(--success);
+    border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.btn-approve:hover {
+    background-color: var(--success);
+    color: white;
+}
+
+.btn-reject {
+    background-color: #fef2f2;
+    color: var(--danger);
+    border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+.btn-reject:hover {
+    background-color: var(--danger);
+    color: white;
+}
+
+.loading-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background-color: rgba(15, 23, 42, 0.6);
+    /* Desenfoque de pantalla completa mientras se procesan los documentos */
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    justify-content: center;
+    align-items: center;
+    flex-direction: column;
+    z-index: 2000; /* Asegura estar por encima de todos los demás componentes */
+    color: white;
+}
+
+.spinner {
+    width: 60px;
+    height: 60px;
+    border: 5px solid rgba(255, 255, 255, 0.1);
+    border-radius: 50%;
+    border-left-color: white; /* Color del segmento giratorio */
+    animation: spin 1s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+    margin-bottom: 1.5rem;
+}
+
+/* Animación de rotación continua de 360 grados */
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}

@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Portal de Validación Documental Inteligente</title>
+    <!-- Cargamos Outfit, una tipografía de Google Fonts de corte tecnológico y premium -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Vinculamos la hoja de estilos externa -->
+    <link rel="stylesheet" href="style.css">
+    <!-- Vinculamos la lógica de JavaScript externa -->
+    <script src="app.js" defer></script>
+</head>
+<body>
+
+
+    <div class="container">
+        <header>
+            <h1>Portal de Validación Documental Inteligente</h1>
+            <p>Clasificación visual, control de calidad y verificación OCR asistida por Inteligencia Artificial</p>
+        </header>
+
+        <!-- Barra de pestañas redondeada y estética -->
+        <div class="tabs">
+            <button class="tab-btn active" onclick="switchTab('alumno')">Pestaña Alumno</button>
+            <button class="tab-btn" onclick="switchTab('admin')">Pestaña Servicios Escolares</button>
+        </div>
+
+        <!-- SECCIÓN 1: VISTA DEL ALUMNO (FORMULARIO) -->
+        <div class="tab-content active" id="tab-alumno">
+            <h2>Registro de Alumno y Subida de Documentos</h2>
+            <form id="alumnoForm" onsubmit="registrarAlumno(event)">
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="nombre">Nombre Completo del Alumno</label>
+                        <input type="text" id="nombre" required placeholder="Ej. Carlos Alberto Gómez López">
+                    </div>
+                    <div class="form-group">
+                        <label for="edad">Edad del Aspirante</label>
+                        <input type="number" id="edad" required min="15" max="90" placeholder="Ej. 18">
+                    </div>
+                    <div class="form-group full-width">
+                        <label for="carrera">Carrera Universitaria de Destino</label>
+                        <select id="carrera" required>
+                            <option value="" disabled selected>Selecciona una opción</option>
+                            <option value="Ingeniería en Sistemas Computacionales">Ingeniería en Sistemas Computacionales</option>
+                            <option value="Licenciatura en Administración de Empresas">Licenciatura en Administración de Empresas</option>
+                            <option value="Ingeniería Industrial y de Manufactura">Ingeniería Industrial y de Manufactura</option>
+                            <option value="Licenciatura en Negocios Internacionales">Licenciatura en Negocios Internacionales</option>
+                        </select>
+                    </div>
+                    
+                    <!-- Botón interactivo de carga de CURP -->
+                    <div class="form-group">
+                        <label>Clave Única de Registro de Población (CURP)</label>
+                        <div class="file-upload-box" id="curpBox">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                            </svg>
+                            <span id="curpLabel">Arrastra o selecciona tu archivo PDF/Imagen</span>
+                            <input type="file" id="curpFile" required accept=".pdf,.png,.jpg,.jpeg">
+                        </div>
+                    </div>
+
+                    <!-- Botón interactivo de carga de Acta -->
+                    <div class="form-group">
+                        <label>Acta de Nacimiento Oficial</label>
+                        <div class="file-upload-box" id="actaBox">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path>
+                            </svg>
+                            <span id="actaLabel">Arrastra o selecciona tu archivo PDF/Imagen</span>
+                            <input type="file" id="actaFile" required accept=".pdf,.png,.jpg,.jpeg">
+                        </div>
+                    </div>
+                </div>
+
+                <button type="submit" class="submit-btn">Enviar Documentación a Análisis</button>
+            </form>
+
+            <!-- Banner de confirmación: oculto por defecto, visible tras envío exitoso -->
+            <div id="successMessage" style="
+                display:none; align-items:center; gap:1rem;
+                margin-top:1.5rem; padding:1.2rem 1.8rem;
+                background:linear-gradient(135deg,#d1fae5,#a7f3d0);
+                border:1.5px solid #34d399; border-radius:14px;
+                box-shadow:0 4px 20px rgba(52,211,153,0.18);
+            ">
+                <span style="font-size:2rem;">✅</span>
+                <div>
+                    <p style="font-weight:700; color:#065f46; margin:0; font-size:1rem;">
+                        ¡Documentos recibidos correctamente!
+                    </p>
+                    <p style="color:#047857; margin:0.3rem 0 0; font-size:0.88rem;">
+                        Tu solicitud ha sido registrada. En los próximos días recibirás una respuesta
+                        sobre si tus documentos fueron validados por el sistema de Inteligencia Artificial.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- SECCIÓN 2: VISTA DE CONTROL ESCOLAR (TABLA Y AUDITORÍA) -->
+        <div class="tab-content" id="tab-admin">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2rem;">
+                <h2>Bandeja de Entrada y Auditoría Humana</h2>
+                <button onclick="limpiarRegistros()" class="btn-action btn-reject" style="font-weight:600;">Vaciar Bandeja</button>
+            </div>
+            
+            <div class="admin-table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Nombre del Alumno</th>
+                            <th>Carrera Solicitada</th>
+                            <th>Validación CURP (IA)</th>
+                            <th>Validación Acta (IA)</th>
+                            <th>Dictamen Final</th>
+                            <th>Acción Administrativa</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tablaAlumnos">
+                        <!-- Filas inyectadas dinámicamente con JavaScript -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+</body>
+</html>
